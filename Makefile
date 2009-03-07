@@ -1,6 +1,6 @@
 .PHONY: ALL
 
-ALL: post.fcgi login.fcgi createlogin.fcgi cookies.fcgi
+ALL: post.fcgi login.fcgi logout.fcgi createlogin.fcgi cookies.fcgi
 
 post.fcgi: post.o loginutils.o
 	g++ $^ -lfcgi -lcgic_fcgi -lgcrypt -o $@

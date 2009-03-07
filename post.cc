@@ -29,10 +29,14 @@ int cgiMain()
 	// TODO: verify that the user's id can be trusted! If not, redirect to cgi-bin/login
 	if (!userIsValidated())
 	{
+		cgiHeaderStatus(403,(char*)"User could not be validated.");
+		cgiHeaderContentType((char*)"text/xml");
+		FCGI_printf("<error>User could not be validated.</error>");
+		
 		return 0;
 	}
 	
-	char* doctype="document";
+	char* doctype=(char*)"document";
 	if (cgiPathInfo && strlen(cgiPathInfo))
 	{
 		doctype=cgiPathInfo+1; // +1 skips initial slash
@@ -54,7 +58,7 @@ int cgiMain()
 	if (!xmlOut)
 	{
 		// TODO: handle this (500 Internal Server error?)
-		cgiHeaderStatus(500,"File creation failed");
+		cgiHeaderStatus(500,(char*)"File creation failed");
 	}
 	else
 	{
@@ -88,7 +92,7 @@ int cgiMain()
 		FCGI_fprintf(xmlOut,"</cgi><doc><%s>",doctype);
 		
 		char content_type[256];
-		cgiFormResultType res=cgiFormFileContentType("file",content_type,sizeof(content_type));
+		cgiFormResultType res=cgiFormFileContentType((char*)"file",content_type,sizeof(content_type));
 		if (res==cgiFormNoContentType || res==cgiFormNotFound)
 		{
 			char** fields;
@@ -124,13 +128,22 @@ int cgiMain()
 		 * Run the app's command to process it
 		 */
 		char command[512];
-		char wwwroot[]="/var/www/"; // TODO: make the config'd
-		char appprefix[]="/recipes/"; // TODO: make the config'd
-		sprintf(command,"%s/%s/bin/post/%s %s",wwwroot,appprefix,doctype,xmlFileLoc);
+		// char wwwroot[]="/var/www/"; // TODO: make this config'd
+		// char appprefix[]="/beer/"; // TODO: make this config'd
+		char bindir[]="/home/troy/beerliberation/app/bin"; // TODO: make this config'd
+		sprintf(command,"%s/post/%s %s",bindir,doctype,xmlFileLoc);
 		FILE* appcgi=popen(command,"r");
 		if (appcgi)
 		{
 			// Read output of command, that's the XML used for the XSL
+			char output[1024];
+			do
+			{
+				size_t n=fread(output,1,sizeof(output),appcgi);
+				if (n)
+					FCGI_fwrite(output,1,n,FCGI_stdout);
+			}
+			while (!feof(appcgi));
 			
 			int ret=pclose(appcgi);
 			
@@ -147,9 +160,12 @@ int cgiMain()
 				 */
 			}
 		}
+		else
+		{
+			cgiHeaderContentType((char*)"text/xml");
+			FCGI_printf("<post></post>");
+		}
 		
-		cgiHeaderContentType("text/xml");
-		FCGI_printf("<post></post>");
 		
 	}
 	

@@ -1,3 +1,4 @@
+#include <fcgi_stdio.h>
 extern "C"
 {
 #include <cgic.h>
@@ -11,14 +12,23 @@ extern "C"
 
 using namespace std;
 
+extern "C" void cgiInit() 
+{
+	
+}
+
+extern "C" void cgiUninit() 
+{
+	
+}
 
 int cgiMain()
 {
 	clearLoginCookies();
 			
 	// Generate XML message
-	cgiHeaderContentType("text/xml");
-	fprintf(cgiOut,"<login></login>");
+	cgiHeaderContentType((char*)"text/xml");
+	FCGI_printf("<login></login>");
 	
 	return 0;
 }
