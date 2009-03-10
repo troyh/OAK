@@ -19,7 +19,6 @@ OAK_APPLIB_HANDLE applib;
 
 extern "C" void cgiInit() 
 {
-	srand(time(0));
 	oak_load_app_library(&applib);
 }
 
@@ -90,19 +89,26 @@ int cgiMain()
 				{
 					size_t buflen=0;
 					NAMEVAL_PAIR* post_data=(NAMEVAL_PAIR*)calloc(total_fields,sizeof(NAMEVAL_PAIR));
-					for(size_t i = 0; fields[i]; ++i)
+					if (!post_data)
 					{
-						cgiFormString(fields[i],&buf[buflen],total_bytes-buflen);
-					
-						post_data[i].name=fields[i];
-						post_data[i].val=&buf[buflen];
-						
-						buflen+=strlen(&buf[buflen])+1;
+						status_string="Internal error";
 					}
-
-					if (oak_app_post_success(applib,doctype,userid,post_data,total_fields,&nv_pairs,&nv_pairs_len))
+					else
 					{
-						oak_app_post_failed(applib,doctype,"",POST_APPREJECTED,&nv_pairs,&nv_pairs_len);
+						for(size_t i = 0; fields[i]; ++i)
+						{
+							cgiFormString(fields[i],&buf[buflen],total_bytes-buflen);
+					
+							post_data[i].name=fields[i];
+							post_data[i].val=&buf[buflen];
+						
+							buflen+=strlen(&buf[buflen])+1;
+						}
+					
+						if (oak_app_post_success(applib,doctype,userid,post_data,total_fields,&nv_pairs,&nv_pairs_len))
+						{
+							oak_app_post_failed(applib,doctype,"",POST_APPREJECTED,&nv_pairs,&nv_pairs_len);
+						}
 					}
 					
 					free(buf);
@@ -123,9 +129,9 @@ int cgiMain()
 				// }
 			}
 	}
-
+	
 	if (status_string)
-		cgiHeaderStatus(403,(char*)status_string);
+		cgiHeaderStatus(501,(char*)status_string);
 	else
 	{
 		// TODO: support JSON output too

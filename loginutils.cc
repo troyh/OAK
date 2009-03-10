@@ -4,19 +4,53 @@ extern "C"
 }
 #include <fstream>
 #include <gcrypt.h>
+#include <libmemcached/memcached.h>
 
 #include "loginutils.h"
 
 using namespace std;
 
 
+const size_t MAX_MEMCACHED_KEY_LEN=256;
+
 LOGININFO::LOGININFO()
 {
-	memset(userid,0,sizeof(userid));
-	memset(email,0,sizeof(email));
-	memset(password,0,sizeof(password));
-	memset(secret,0,sizeof(secret));
+	memset(m_userid,0,sizeof(m_userid));
+	memset(m_email,0,sizeof(m_email));
+	memset(m_password,0,sizeof(m_password));
+	memset(m_secret,0,sizeof(m_secret));
 }
+
+LOGININFO::LOGININFO(const char* p)
+{
+	memcpy(m_userid,p,size());
+}
+
+void LOGININFO::userid(const char* p)
+{
+	strncpy(m_userid,p,sizeof(m_userid)-1);
+	m_userid[sizeof(m_userid)-1]='\0';
+}
+
+void LOGININFO::email(const char* p)
+{
+	strncpy(m_email,p,sizeof(m_email)-1);
+	m_email[sizeof(m_email)-1]='\0';
+}
+
+void LOGININFO::password(const char* p)
+{
+	strncpy(m_password,p,sizeof(m_password)-1);
+	m_password[sizeof(m_password)-1]='\0';
+}
+
+void LOGININFO::secret(const char* p)
+{
+	strncpy(m_secret,p,sizeof(m_secret)-1);
+	m_secret[sizeof(m_secret)-1]='\0';
+}
+
+
 
 void getDomain(char* buffer,size_t bufsize)
 {
@@ -69,88 +103,200 @@ bool createLogin(const char* email, const char* password, const char* userid, co
 		!userid || !strlen(userid) ||
 		!secret || !strlen(secret))
 		return false;
+
+	bool bReturn=false;
 	
-	ofstream userdb("/tmp/userdb",ios::app);
-	userdb << email << '\t'
-		   << password << '\t'
-		   << userid << '\t'
-		   << secret << endl;
-		
-	return true;
+	LOGININFO info;
+	info.email(email);
+	info.password(password);
+	info.userid(userid);
+	info.secret(secret);
+	
+	char key[MAX_MEMCACHED_KEY_LEN];
+	strncpy(key,"oak/userdb/email/",sizeof(key)-1);
+	key[sizeof(key)-1]='\0';
+	strncat(key,email,sizeof(key)-strlen(key)-1);
+	key[sizeof(key)-1]='\0';
+
+	char key2[MAX_MEMCACHED_KEY_LEN];
+	strncpy(key2,"oak/userdb/userid/",sizeof(key2)-1);
+	key[sizeof(key2)-1]='\0';
+	strncat(key2,userid,sizeof(key2)-strlen(key2)-1);
+	key[sizeof(key2)-1]='\0';
+
+	memcached_st* st=memcached_create(NULL);
+	
+	memcached_return r=memcached_server_add(st,"localhost",21201);
+	if (r!=MEMCACHED_SUCCESS)
+	{
+	}
+	else
+	{
+		r=memcached_add(st,key,strlen(key),info.ptr(),info.size(),0,0);
+		if (r!=MEMCACHED_SUCCESS)
+		{
+		}
+		else
+		{
+			r=memcached_add(st,key2,strlen(key2),info.ptr(),info.size(),0,0);
+			if (r!=MEMCACHED_SUCCESS)
+			{
+				// TODO: Erase the one we just set
+			}
+			else
+			{
+				bReturn=true;
+			}
+		}
+	}
+	
+	memcached_free(st);
+	
+	return bReturn;
 }
 
 bool updateLogin(LOGININFO* login)
 {
 	if (!login || 
-	    !login->email    || !strlen(login->email) ||
-		!login->password || !strlen(login->password) ||
-		!login->userid   || !strlen(login->userid) ||
-		!login->secret   || !strlen(login->secret))
+	    !login->email()    || !strlen(login->email()) ||
+		!login->password() || !strlen(login->password()) ||
+		!login->userid()   || !strlen(login->userid()) ||
+		!login->secret()   || !strlen(login->secret()))
 		return false;
-	
-	ofstream userdb("/tmp/userdb",ios::app);
-	userdb << login->email << '\t'
-		   << login->password << '\t'
-		   << login->userid << '\t'
-		   << login->secret << endl;
 		
-	return true;
+	bool bReturn=false;
+
+	char key[MAX_MEMCACHED_KEY_LEN];
+	strncpy(key,"oak/userdb/email/",sizeof(key)-1);
+	key[sizeof(key)-1]='\0';
+	strncat(key,login->email(),sizeof(key)-strlen(key)-1);
+	key[sizeof(key)-1]='\0';
+
+	char key2[MAX_MEMCACHED_KEY_LEN];
+	strncpy(key2,"oak/userdb/userid/",sizeof(key2)-1);
+	key[sizeof(key2)-1]='\0';
+	strncat(key2,login->userid(),sizeof(key2)-strlen(key2)-1);
+	key[sizeof(key2)-1]='\0';
+
+	memcached_st* st=memcached_create(NULL);
+	
+	memcached_return r=memcached_server_add(st,"localhost",21201);
+	if (r!=MEMCACHED_SUCCESS)
+	{
+		
+	}
+	else
+	{
+		r=memcached_set(st,key,strlen(key),login->ptr(),login->size(),0,0);
+		if (r!=MEMCACHED_SUCCESS)
+		{
+		}
+		else
+		{
+			r=memcached_set(st,key2,strlen(key2),login->ptr(),login->size(),0,0);
+			if (r!=MEMCACHED_SUCCESS)
+			{
+				// TODO: Erase the one we just set
+			}
+			else
+			{
+				bReturn=true;
+			}
+		}
+	}
+	
+	memcached_free(st);
+	
+	
+	return bReturn;
 }
 
 LOGININFO* lookupLogin(const char* email)
 {
-	string ea,password,userid,secret;
-	ifstream userdb("/tmp/userdb");
-	while (userdb.good())
-	{
-		userdb >> ea >> password >> userid >> secret;
-		if (!strcmp(ea.c_str(),email))
-		{
-			LOGININFO* login=new LOGININFO;
+	LOGININFO* login=NULL;
 
-			strncpy(login->email,ea.c_str(),sizeof(login->email));
-			strncpy(login->password,password.c_str(),sizeof(login->password));
-			strncpy(login->userid,userid.c_str(),sizeof(login->userid));
-			strncpy(login->secret,secret.c_str(),sizeof(login->secret));
-			
-			login->email   [sizeof(login->email   )-1]='\0';
-			login->userid  [sizeof(login->userid  )-1]='\0';
-			login->password[sizeof(login->password)-1]='\0';
-			login->secret  [sizeof(login->secret  )-1]='\0';
-			
-			return login;
+	memcached_st* st=memcached_create(NULL);
+	if (st)
+	{
+		memcached_return r=memcached_server_add(st,"localhost",21201);
+		if (r!=MEMCACHED_SUCCESS)
+		{
+		
 		}
+		else
+		{
+			size_t val_len;
+			uint32_t flags;
+
+			char key[MAX_MEMCACHED_KEY_LEN];
+			strncpy(key,"oak/userdb/email/",sizeof(key)-1);
+			key[sizeof(key)-1]='\0';
+			strncat(key,email,sizeof(key)-strlen(key)-1);
+			key[sizeof(key)-1]='\0';
+	
+			char* p=memcached_get(st,key,strlen(key),&val_len,&flags,&r);
+			if (!p)
+			{
+			}
+			else
+			{
+				login=new LOGININFO(p);
+				free(p);
+		
+				if (val_len!=login->size())
+				{
+				}
+			}
+		}
+	
+		memcached_free(st);
 	}
 	
-	return NULL;
+	return login;
 }
 
 LOGININFO* lookupLoginByUserId(const char* str)
 {
-	string ea,password,userid,secret;
-	ifstream userdb("/tmp/userdb");
-	while (userdb.good())
-	{
-		userdb >> ea >> password >> userid >> secret;
-		if (!strcmp(userid.c_str(),str))
-		{
-			LOGININFO* login=new LOGININFO;
+	LOGININFO* login=NULL;
 
-			strncpy(login->email,ea.c_str(),sizeof(login->email));
-			strncpy(login->password,password.c_str(),sizeof(login->password));
-			strncpy(login->userid,userid.c_str(),sizeof(login->userid));
-			strncpy(login->secret,secret.c_str(),sizeof(login->secret));
+	memcached_st* st=memcached_create(NULL);
+	if (st)
+	{
+		memcached_return r=memcached_server_add(st,"localhost",21201);
+		if (r!=MEMCACHED_SUCCESS)
+		{
 			
-			login->email   [sizeof(login->email   )-1]='\0';
-			login->userid  [sizeof(login->userid  )-1]='\0';
-			login->password[sizeof(login->password)-1]='\0';
-			login->secret  [sizeof(login->secret  )-1]='\0';
-			
-			return login;
 		}
+		else
+		{
+			size_t val_len;
+			uint32_t flags;
+	
+			char key[MAX_MEMCACHED_KEY_LEN];
+			strncpy(key,"oak/userdb/userid/",sizeof(key)-1);
+			key[sizeof(key)-1]='\0';
+			strncat(key,str,sizeof(key)-strlen(key)-1);
+			key[sizeof(key)-1]='\0';
+	
+			char* p=memcached_get(st,key,strlen(key),&val_len,&flags,&r);
+			if (!p)
+			{
+			}
+			else
+			{
+				login=new LOGININFO(p);
+				free(p);
+		
+				if (val_len!=login->size())
+				{
+				}
+			}
+		}
+	
+		memcached_free(st);
 	}
 	
-	return NULL;
+	return login;
 }
 
 bool makeUserKey(LOGININFO* login,char* ipaddr,char* buffer,size_t buffer_size)
@@ -160,8 +306,8 @@ bool makeUserKey(LOGININFO* login,char* ipaddr,char* buffer,size_t buffer_size)
 
 	// Create the hash, which is an MD5 on of a concatenation of secretkey+userid+cgiRemoteAddr
 	char to_be_hashed[256]="";
-	strncat(to_be_hashed,login->secret,sizeof(to_be_hashed));
-	strncat(to_be_hashed,login->userid,sizeof(to_be_hashed)-strlen(to_be_hashed));
+	strncat(to_be_hashed,login->secret(),sizeof(to_be_hashed));
+	strncat(to_be_hashed,login->userid(),sizeof(to_be_hashed)-strlen(to_be_hashed));
 	strncat(to_be_hashed,ipaddr,sizeof(to_be_hashed)-strlen(to_be_hashed));
 	to_be_hashed[sizeof(to_be_hashed)-1]='\0';
 
@@ -188,7 +334,7 @@ void setLoginCookies(LOGININFO* login)
 	char hash[USERKEY_LENGTH];
 	makeUserKey(login,cgiRemoteAddr,hash,sizeof(hash));
 		
-	cgiHeaderCookieSetString((char*)"userid",login->userid,86400*14,(char*)"/",domain);
+	cgiHeaderCookieSetString((char*)"userid",(char*)login->userid(),86400*14,(char*)"/",domain);
 	cgiHeaderCookieSetString((char*)"usrkey",hash  ,86400*14,(char*)"/",domain);
 }
 
@@ -224,7 +370,6 @@ bool userIsValidated()
 	// The cookie usrkey must match usrkey
 	if (strcmp(userkey,correct_usrkey))
 	{
-		// TODO: redirect to login
 		return false;
 	}
 
