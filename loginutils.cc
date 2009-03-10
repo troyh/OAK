@@ -188,8 +188,8 @@ void setLoginCookies(LOGININFO* login)
 	char hash[USERKEY_LENGTH];
 	makeUserKey(login,cgiRemoteAddr,hash,sizeof(hash));
 		
-	cgiHeaderCookieSetString("userid",login->userid,86400*14,"/",domain);
-	cgiHeaderCookieSetString("usrkey",hash  ,86400*14,"/",domain);
+	cgiHeaderCookieSetString((char*)"userid",login->userid,86400*14,(char*)"/",domain);
+	cgiHeaderCookieSetString((char*)"usrkey",hash  ,86400*14,(char*)"/",domain);
 }
 
 void clearLoginCookies()
@@ -197,14 +197,14 @@ void clearLoginCookies()
 	char domain[256];
 	getDomain(domain,sizeof(domain));
 	
-	cgiHeaderCookieSetString("userid","",-86400,"/",domain);
-	cgiHeaderCookieSetString("usrkey","",-86400,"/",domain);
+	cgiHeaderCookieSetString((char*)"userid",(char*)"",-86400,(char*)"/",domain);
+	cgiHeaderCookieSetString((char*)"usrkey",(char*)"",-86400,(char*)"/",domain);
 }
 
 bool userIsValidated()
 {
-	char userid[256];
-	cgiCookieString("userid",userid,sizeof(userid));
+	char userid[MAX_USERID_LEN];
+	cgiCookieString((char*)"userid",userid,sizeof(userid));
 
 	LOGININFO* login=lookupLoginByUserId(userid);
 	if (!login)
@@ -220,7 +220,7 @@ bool userIsValidated()
 	}
 
 	char userkey[USERKEY_LENGTH];
-	cgiCookieString("usrkey",userkey,sizeof(userkey));
+	cgiCookieString((char*)"usrkey",userkey,sizeof(userkey));
 	// The cookie usrkey must match usrkey
 	if (strcmp(userkey,correct_usrkey))
 	{

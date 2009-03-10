@@ -1,10 +1,11 @@
 
 const size_t SECRET_LENGTH=32;
 const size_t USERKEY_LENGTH=32;
+const size_t MAX_USERID_LEN=32;
 
 struct LOGININFO
 {
-	char userid[64];
+	char userid[MAX_USERID_LEN];
 	char email[64];
 	char password[64];
 	char secret[SECRET_LENGTH];

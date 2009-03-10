@@ -10,164 +10,142 @@ extern "C"
 #include <time.h>
 #include <unistd.h>
 
+#include "oak.h"
 #include "loginutils.h"
 
 using namespace std;
 
+OAK_APPLIB_HANDLE applib;
+
 extern "C" void cgiInit() 
 {
 	srand(time(0));
+	oak_load_app_library(&applib);
 }
 
 extern "C" void cgiUninit() 
 {
-	
+	oak_unload_app_library(applib);
 }
 
 int cgiMain()
 {
-	// TODO: verify that the user's id can be trusted! If not, redirect to cgi-bin/login
+	NAMEVAL_PAIR* nv_pairs=NULL;
+	size_t nv_pairs_len=0;
+	
+	const char* status_string=NULL;
+	
 	if (!userIsValidated())
 	{
-		cgiHeaderStatus(403,(char*)"User could not be validated.");
-		cgiHeaderContentType((char*)"text/xml");
-		FCGI_printf("<error>User could not be validated.</error>");
-		
-		return 0;
-	}
-	
-	char* doctype=(char*)"document";
-	if (cgiPathInfo && strlen(cgiPathInfo))
-	{
-		doctype=cgiPathInfo+1; // +1 skips initial slash
-		// Truncate at the first non-alphanumeric, underscore or hyphen char
-		for(char* p = doctype; *p; ++p)
-		{
-			if (!isalnum(*p) && *p!='_' && *p!='-')
-			{
-				*p='\0';
-				break;
-			}
-		}
-		// TODO: verify that the doctype, which is supplied by the user, is controlled, i.e., not a security risk
-	}
-	
-	char xmlFileLoc[256];
-	sprintf(xmlFileLoc,"/tmp/post-%s-%lu-%d-%d.xml",doctype,time(0),getpid(),rand());
-	FILE* xmlOut=FCGI_fopen(xmlFileLoc,"w");
-	if (!xmlOut)
-	{
-		// TODO: handle this (500 Internal Server error?)
-		cgiHeaderStatus(500,(char*)"File creation failed");
+		oak_app_post_failed(applib,"","",POST_INVALIDUSER,&nv_pairs,&nv_pairs_len);
+
+		status_string="User could not be validated.";
 	}
 	else
 	{
-		FCGI_fprintf(xmlOut,"<post>");
-		FCGI_fprintf(xmlOut,"<cgi>");
-	
-		if (strlen(cgiAuthType))
-			FCGI_fprintf(xmlOut,"<AuthType>%s</AuthType>",cgiAuthType);
-		if (strlen(cgiRemoteHost))
-			FCGI_fprintf(xmlOut,"<RemoteHost>%s</RemoteHost>",cgiRemoteHost);
-		if (strlen(cgiRemoteAddr))
-			FCGI_fprintf(xmlOut,"<RemoteAddr>%s</RemoteAddr>",cgiRemoteAddr);
-		if (strlen(cgiRemoteIdent))
-			FCGI_fprintf(xmlOut,"<RemoteIdent>%s</RemoteIdent>",cgiRemoteIdent);
-		
-		char** cookies;
-		cgiCookies(&cookies);
-		if (cookies[0])
+		char* doctype=(char*)"document";
+		if (cgiPathInfo && strlen(cgiPathInfo))
 		{
-			FCGI_fprintf(xmlOut,"<cookies>");
-			for(size_t i = 0; cookies[i]; ++i)
+			doctype=cgiPathInfo+1; // +1 skips initial slash
+			// Truncate at the first non-alphanumeric, underscore or hyphen char
+			for(char* p = doctype; *p; ++p)
 			{
-				char buf[256];
-				cgiCookieString(cookies[i],buf,sizeof(buf));
-				FCGI_fprintf(xmlOut,"<%s>%s</%s>",cookies[i],buf,cookies[i]);
+				if (!isalnum(*p) && *p!='_' && *p!='-')
+				{
+					*p='\0';
+					break;
+				}
 			}
-			FCGI_fprintf(xmlOut,"</cookies>");
-			
-			cgiStringArrayFree(cookies);
-		}
-		FCGI_fprintf(xmlOut,"</cgi><doc><%s>",doctype);
-		
-		char content_type[256];
-		cgiFormResultType res=cgiFormFileContentType((char*)"file",content_type,sizeof(content_type));
-		if (res==cgiFormNoContentType || res==cgiFormNotFound)
-		{
-			char** fields;
-			cgiFormEntries(&fields);
-			for(size_t i = 0; fields[i]; ++i)
-			{
-				char buf[4096];
-				cgiFormString(fields[i],buf,sizeof(buf));
-				FCGI_fprintf(xmlOut,"<%s>%s</%s>",fields[i],buf,fields[i]);
-			}
-			cgiStringArrayFree(fields);
-		}
-		else if (!strcasecmp(content_type,"text/xml"))
-		{
-			// Write the XML doc as-is
-			while (!FCGI_feof(cgiIn))
-			{
-				char buf[4096];
-				size_t n=FCGI_fread(buf,sizeof(char),cgiContentLength<sizeof(buf)?cgiContentLength:sizeof(buf),cgiIn);
-				FCGI_fwrite(buf,sizeof(char),n,xmlOut);
-			}
-		}
-		else
-		{
-			// TODO: what to do?
-			// cout << "Unknown content-type: " << content_type << endl;
+			// TODO: verify that the doctype, which is supplied by the user, is controlled, i.e., not a security risk
 		}
 
-		FCGI_fprintf(xmlOut,"</%s></doc></post>",doctype);
-		FCGI_fclose(xmlOut);
+		char userid[MAX_USERID_LEN];
+		cgiCookieString((char*)"userid",userid,sizeof(userid));
+		
+			char content_type[256];
+			cgiFormResultType res=cgiFormFileContentType((char*)"file",content_type,sizeof(content_type));
+			if (res==cgiFormNoContentType || res==cgiFormNotFound)
+			{
+				char** fields;
+				cgiFormEntries(&fields);
+				
+				// Count the number of fields and bytes needed for the data
+				size_t total_fields=0;
+				size_t total_bytes=0;
+				while(fields[total_fields])
+				{
+					int n;
+					cgiFormStringSpaceNeeded(fields[total_fields],&n);
+					++total_fields;
+					total_bytes+=n;
+				}
+					
+				// Alloc enough space for total items
+				char* buf=(char*)calloc(total_bytes,sizeof(char));
+				if (!buf)
+				{
+					status_string="Internal error";
+				}
+				else
+				{
+					size_t buflen=0;
+					NAMEVAL_PAIR* post_data=(NAMEVAL_PAIR*)calloc(total_fields,sizeof(NAMEVAL_PAIR));
+					for(size_t i = 0; fields[i]; ++i)
+					{
+						cgiFormString(fields[i],&buf[buflen],total_bytes-buflen);
+					
+						post_data[i].name=fields[i];
+						post_data[i].val=&buf[buflen];
+						
+						buflen+=strlen(&buf[buflen])+1;
+					}
 
-		/*
-		 * Run the app's command to process it
-		 */
-		char command[512];
-		// char wwwroot[]="/var/www/"; // TODO: make this config'd
-		// char appprefix[]="/beer/"; // TODO: make this config'd
-		char bindir[]="/home/troy/beerliberation/app/bin"; // TODO: make this config'd
-		sprintf(command,"%s/post/%s %s",bindir,doctype,xmlFileLoc);
-		FILE* appcgi=popen(command,"r");
-		if (appcgi)
-		{
-			// Read output of command, that's the XML used for the XSL
-			char output[1024];
-			do
+					if (oak_app_post_success(applib,doctype,userid,post_data,total_fields,&nv_pairs,&nv_pairs_len))
+					{
+						oak_app_post_failed(applib,doctype,"",POST_APPREJECTED,&nv_pairs,&nv_pairs_len);
+					}
+					
+					free(buf);
+				}
+				
+				cgiStringArrayFree(fields);
+			}
+			else if (!strcasecmp(content_type,"text/xml"))
 			{
-				size_t n=fread(output,1,sizeof(output),appcgi);
-				if (n)
-					FCGI_fwrite(output,1,n,FCGI_stdout);
+				status_string="XML files not supported";
+				// TODO: support uploading of an XML doc
+				// // Write the XML doc as-is
+				// while (!FCGI_feof(cgiIn))
+				// {
+				// 	char buf[4096];
+				// 	size_t n=FCGI_fread(buf,sizeof(char),cgiContentLength<sizeof(buf)?cgiContentLength:sizeof(buf),cgiIn);
+				// 	FCGI_fwrite(buf,sizeof(char),n,xmlOut);
+				// }
 			}
-			while (!feof(appcgi));
-			
-			int ret=pclose(appcgi);
-			
-			if (ret==0)
-			{			
-				/*
-				 * Ok, generate output using "good" XSL stylesheet
-				 */
-			}
-			else
-			{
-				/*
-				 * Error, generate output using "bad" XSL stylesheet
-				 */
-			}
-		}
-		else
-		{
-			cgiHeaderContentType((char*)"text/xml");
-			FCGI_printf("<post></post>");
-		}
-		
-		
 	}
+
+	if (status_string)
+		cgiHeaderStatus(403,(char*)status_string);
+	else
+	{
+		// TODO: support JSON output too
+		cgiHeaderContentType((char*)"text/xml");
+
+		FCGI_printf("<post>");
+
+		// Output app's name-value pairs
+		for (size_t i=0;i<nv_pairs_len;++i)
+		{
+			// TODO: UTF-8 encode these
+			if (nv_pairs[i].name && nv_pairs[i].val)
+				FCGI_printf("<%s>%s</%s>", nv_pairs[i].name, nv_pairs[i].val, nv_pairs[i].name);
+		}
+	
+		FCGI_printf("</post>");
+	}
+	
+	if (nv_pairs)
+		free(nv_pairs);
 	
 	return 0;
 }
