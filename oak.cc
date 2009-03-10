@@ -9,6 +9,7 @@
 OAK_APPLIB_HANDLE::OAK_APPLIB_HANDLE()
 	: dl_handle(0),login_success(0),login_failed(0),logout_success(0),logout_failed(0)
 {
+	memset(dl_filename,0,sizeof(dl_filename));
 }
 
 
@@ -28,6 +29,9 @@ void oak_load_app_library(OAK_APPLIB_HANDLE* h)
 
 		strncat(libfilename,"/libapp.so",sizeof(libfilename)-1);
 		libfilename[sizeof(libfilename)-1]='\0';
+		
+		strncpy(h->dl_filename,libfilename,sizeof(h->dl_filename)-1);
+		h->dl_filename[sizeof(h->dl_filename)-1]='\0';
 
 		// If the app has a library available, load it
 		struct stat sb;
@@ -37,6 +41,8 @@ void oak_load_app_library(OAK_APPLIB_HANDLE* h)
 			if (!h->dl_handle)
 			{
 				// TODO: handle this
+				strncpy(h->dl_error,dlerror(),sizeof(h->dl_error));
+				h->dl_error[sizeof(h->dl_error)-1]='\0';
 			}
 			else
 			{
@@ -125,4 +131,14 @@ int oak_app_post_failed(OAK_APPLIB_HANDLE h,const char* doctype,const char* user
 	if (h.post_failed)
 		h.post_failed(doctype,userid,reason,nv_pairs,nv_pairs_count);
 	return 0;
+}
+
+const char* NAMEVAL_PAIR_OBJ::get(const char* name) const
+{
+	for(size_t i = 0; i < m_len; ++i)
+	{
+		if (!strcmp(m_nvp[i].name,name))
+			return m_nvp[i].val;
+	}
+	return NULL;
 }

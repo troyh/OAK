@@ -1,7 +1,9 @@
+#include <stdlib.h>
+
 struct NAMEVAL_PAIR
 {
-	const char* name;
-	const char* val;
+	char* name;
+	char* val;
 };
 
 typedef enum
@@ -37,6 +39,8 @@ typedef int (*POST_FAILED_FUNC)(const char* doctype,const char* userid,POST_FAIL
 struct OAK_APPLIB_HANDLE
 {
 	void* dl_handle;
+	char dl_filename[256];
+	char dl_error[256];
 	CREATELOGIN_SUCCESS_FUNC 	createlogin_success;
 	CREATELOGIN_FAILED_FUNC 	createlogin_failed;
 	LOGIN_SUCCESS_FUNC 	login_success;
@@ -68,3 +72,16 @@ int oak_app_logout_failed(OAK_APPLIB_HANDLE h,const char* userid,LOGIN_FAILED_RE
 
 int oak_app_post_success(OAK_APPLIB_HANDLE h,const char* doctype,const char* userid, NAMEVAL_PAIR* post_data, size_t post_data_len, NAMEVAL_PAIR** nv_pairs, size_t* nv_pairs_count);
 int oak_app_post_failed(OAK_APPLIB_HANDLE h,const char* doctype,const char* userid,POST_FAILED_REASON reason, NAMEVAL_PAIR** nv_pairs, size_t* nv_pairs_count);
+
+class NAMEVAL_PAIR_OBJ
+{
+	const NAMEVAL_PAIR* m_nvp;
+	size_t m_len;
+public:
+	NAMEVAL_PAIR_OBJ(NAMEVAL_PAIR* nvp, size_t count)
+		: m_nvp(nvp), m_len(count)
+	{
+	}
+	
+	const char* get(const char* name) const;
+};

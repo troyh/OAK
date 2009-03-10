@@ -47,10 +47,10 @@ int cgiMain()
 	{
 		// Look up email & password in user list
 		LOGININFO* login=lookupLogin(email);
-		if (!login || strcmp(login->password,password))
+		if (!login || strcmp(login->password(),password))
 		{
 			// Incorrect password, failed login
-			oak_app_login_failed(applib,(login?login->userid:""),LOGIN_INVALID,&nv_pairs,&nv_pairs_len);
+			oak_app_login_failed(applib,(login?login->userid():""),LOGIN_INVALID,&nv_pairs,&nv_pairs_len);
 			cgiHeaderStatus(501,(char*)"Login failed");
 		}
 		else
@@ -58,20 +58,20 @@ int cgiMain()
 			// Successful login, create a new secret and set cookies
 			char secret[SECRET_LENGTH];
 			createSecret(secret,sizeof(secret));
-			memcpy(login->secret,secret,sizeof(login->secret));
+			login->secret(secret);
 			updateLogin(login);
 			setLoginCookies(login);
 
-			if (oak_app_login_success(applib,(login->userid?login->userid:""),&nv_pairs,&nv_pairs_len))
+			if (oak_app_login_success(applib,(login->userid()?login->userid():""),&nv_pairs,&nv_pairs_len))
 			{
-				oak_app_login_failed(applib,(login->userid?login->userid:""),LOGIN_APPREJECTED,&nv_pairs,&nv_pairs_len);
+				oak_app_login_failed(applib,(login->userid()?login->userid():""),LOGIN_APPREJECTED,&nv_pairs,&nv_pairs_len);
 				cgiHeaderStatus(501,(char*)"Login rejected");
 			}
 			else
 			{
 				// Generate XML message
 				cgiHeaderContentType((char*)"text/xml");
-				FCGI_printf("<login><userid>%s</userid>",login->userid);
+				FCGI_printf("<login><userid>%s</userid>",login->userid());
 			
 				// Output app's name-value pairs
 				for (size_t i=0;i<nv_pairs_len;++i)
@@ -88,8 +88,13 @@ int cgiMain()
 
 	if (nv_pairs)
 	{
+		for(size_t i = 0; i < nv_pairs_len; ++i)
+		{
+			free(nv_pairs[i].name);
+			free(nv_pairs[i].val);
+		}
 		free(nv_pairs);
 	}
-	
+
 	return 0;
 }

@@ -61,7 +61,7 @@ int cgiMain()
 		login=lookupLogin(email);
 		if (login)
 		{
-			oak_app_createlogin_failed(applib,login->userid,CREATELOGIN_USERIDINUSE,&nv_pairs,&nv_pairs_len);
+			oak_app_createlogin_failed(applib,login->userid(),CREATELOGIN_USERIDINUSE,&nv_pairs,&nv_pairs_len);
 
 			// TODO: offer another userid?
 			status_string="E-mail address already exists";
@@ -69,9 +69,9 @@ int cgiMain()
 		else
 		{
 			// Can create it, but first, call the app's function
-			if (oak_app_createlogin_success(applib,login->userid,&nv_pairs,&nv_pairs_len))
+			if (oak_app_createlogin_success(applib,login->userid(),&nv_pairs,&nv_pairs_len))
 			{
-				oak_app_createlogin_failed(applib,login->userid,CREATELOGIN_APPREJECTED,&nv_pairs,&nv_pairs_len);
+				oak_app_createlogin_failed(applib,login->userid(),CREATELOGIN_APPREJECTED,&nv_pairs,&nv_pairs_len);
 				status_string="Rejected";
 			}
 			else
@@ -91,7 +91,7 @@ int cgiMain()
 					login=lookupLogin(email);
 					if (!login)
 					{
-						oak_app_createlogin_failed(applib,login->userid,CREATELOGIN_INTERNAL_ERROR,&nv_pairs,&nv_pairs_len);
+						oak_app_createlogin_failed(applib,login->userid(),CREATELOGIN_INTERNAL_ERROR,&nv_pairs,&nv_pairs_len);
 						status_string="Internal login error";
 					}
 					else
@@ -117,8 +117,8 @@ int cgiMain()
 	
 		if (bUserCreated && login)
 		{
-			FCGI_printf("<userid>%s</userid>", login->userid);
-			FCGI_printf("<email>%s</email>", login->email);
+			FCGI_printf("<userid>%s</userid>", login->userid());
+			FCGI_printf("<email>%s</email>", login->email());
 		}
 		
 		// Output app's name-value pairs
@@ -134,6 +134,11 @@ int cgiMain()
 
 	if (nv_pairs)
 	{
+		for(size_t i = 0; i < nv_pairs_len; ++i)
+		{
+			free(nv_pairs[i].name);
+			free(nv_pairs[i].val);
+		}
 		free(nv_pairs);
 	}
 	

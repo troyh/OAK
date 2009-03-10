@@ -1,20 +1,35 @@
-.PHONY: ALL
+.PHONY: ALL INSTALL
 
 CXXFLAGS=-rdynamic 
 
-ALL: post.fcgi login.fcgi logout.fcgi createlogin.fcgi cookies.fcgi
+FCGI_PROGS=post.fcgi login.fcgi logout.fcgi createlogin.fcgi cookies.fcgi
 
-post.fcgi: post.o loginutils.o oak.o
-	g++ $^ -lfcgi -lcgic_fcgi -lgcrypt -ldl -lmemcached -o $@
+ALL: $(FCGI_PROGS)
 
-login.fcgi: login.o loginutils.o oak.o
-	g++ $^ -lfcgi -lcgic_fcgi -lgcrypt -ldl -lmemcached -o $@
+INSTALL: ALL
+	sudo mkdir -p /usr/local/include/OAK/ /usr/local/lib/OAK/
+	sudo cp oak.h /usr/local/include/OAK/
+	sudo cp liboak.a /usr/local/lib/OAK/
+	-sudo killall --quiet $(FCGI_PROGS)
+	sudo cp *.fcgi /var/www/beer/api/
 
-logout.fcgi: logout.o loginutils.o oak.o
-	g++ $^ -lfcgi -lcgic_fcgi -lgcrypt -ldl -lmemcached -o $@
+liboak.a: oak.o
+	ar -rc $@ $^
 
-createlogin.fcgi: createlogin.o loginutils.o oak.o
-	g++ $^ -lfcgi -lcgic_fcgi -lgcrypt -ldl -lmemcached -o $@
+post.fcgi: post.o loginutils.o liboak.a
+	g++ $^ -lfcgi -lcgic_fcgi -lgcrypt -ldl -lmemcached -L. -loak -o $@
+
+login.fcgi: login.o loginutils.o liboak.a
+	g++ $^ -lfcgi -lcgic_fcgi -lgcrypt -ldl -lmemcached -L. -loak -o $@
+
+logout.fcgi: logout.o loginutils.o liboak.a
+	g++ $^ -lfcgi -lcgic_fcgi -lgcrypt -ldl -lmemcached -L. -loak -o $@
+
+createlogin.fcgi: createlogin.o loginutils.o liboak.a
+	g++ $^ -lfcgi -lcgic_fcgi -lgcrypt -ldl -lmemcached -L. -loak -o $@
 
 cookies.fcgi: cookies.o
 	g++ $^ -lfcgi -lcgic_fcgi -o $@
+
+oak.o: oak.cc oak.h
+	g++ -c $< -ldl -o $@

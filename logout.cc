@@ -50,6 +50,11 @@ int cgiMain()
 
 	if (nv_pairs)
 	{
+		for(size_t i = 0; i < nv_pairs_len; ++i)
+		{
+			free(nv_pairs[i].name);
+			free(nv_pairs[i].val);
+		}
 		free(nv_pairs);
 	}
 	
