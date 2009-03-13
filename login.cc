@@ -41,7 +41,7 @@ int cgiMain()
 	{
 		// Failed login
 		oak_app_login_failed(applib,"",LOGIN_MISSING_EMAILPASSWORD,&nv_pairs,&nv_pairs_len);
-		cgiHeaderStatus(501,(char*)"Missing email and/or password");
+		cgiHeaderStatus(400,(char*)"Missing email and/or password");
 	}
 	else
 	{
@@ -51,7 +51,7 @@ int cgiMain()
 		{
 			// Incorrect password, failed login
 			oak_app_login_failed(applib,(login?login->userid():""),LOGIN_INVALID,&nv_pairs,&nv_pairs_len);
-			cgiHeaderStatus(501,(char*)"Login failed");
+			cgiHeaderStatus(401,(char*)"Login failed");
 		}
 		else
 		{

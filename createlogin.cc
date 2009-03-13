@@ -19,6 +19,32 @@ extern "C"
 
 using namespace std;
 
+struct CGIData
+{
+	char *cgiServerSoftware;
+	char *cgiServerName;
+	char *cgiGatewayInterface;
+	char *cgiServerProtocol;
+	char *cgiServerPort;
+	char *cgiRequestMethod;
+	char *cgiPathInfo;
+	char *cgiPathTranslated;
+	char *cgiScriptName;
+	char *cgiQueryString;
+	char *cgiRemoteHost;
+	char *cgiRemoteAddr;
+	char *cgiAuthType;
+	char *cgiRemoteUser;
+	char *cgiRemoteIdent;
+	char *cgiContentType;
+	char *cgiMultipartBoundary;
+	char *cgiCookie;
+	int cgiContentLength;
+	char *cgiAccept;
+	char *cgiUserAgent;
+	char *cgiReferrer;
+};
+
 OAK_APPLIB_HANDLE applib;
 
 extern "C" void cgiInit() 
@@ -37,9 +63,9 @@ int cgiMain()
 	LOGININFO* login=NULL;
 	const char* status_string="";
 	
-	char email[256];
-	char password[256];
-	char userid[256];
+	char email[64];
+	char password[64];
+	char userid[MAX_USERID_LEN];
 	
 	NAMEVAL_PAIR* nv_pairs=NULL;
 	size_t nv_pairs_len=0;
@@ -48,12 +74,11 @@ int cgiMain()
 	cgiFormResultType password_r=cgiFormString((char*)"password",password,sizeof(password));
 	cgiFormResultType userid_r=cgiFormString((char*)"userid",userid,sizeof(userid));
 	
-	if (email_r!=cgiFormSuccess || password_r!=cgiFormSuccess)
+	if (email_r!=cgiFormSuccess || password_r!=cgiFormSuccess || userid_r!=cgiFormSuccess)
 	{
-		oak_app_createlogin_failed(applib,"",CREATELOGIN_MISSING_EMAILPASSWORD,&nv_pairs,&nv_pairs_len);
-
 		// Can't continue without those
-		status_string=="Missing email and/or password";
+		oak_app_createlogin_failed(applib,"",CREATELOGIN_MISSING_EMAILPASSWORD,&nv_pairs,&nv_pairs_len);
+		status_string="Missing email, password and/or userid";
 	}
 	else
 	{
@@ -62,16 +87,14 @@ int cgiMain()
 		if (login)
 		{
 			oak_app_createlogin_failed(applib,login->userid(),CREATELOGIN_USERIDINUSE,&nv_pairs,&nv_pairs_len);
-
-			// TODO: offer another userid?
 			status_string="E-mail address already exists";
 		}
 		else
 		{
 			// Can create it, but first, call the app's function
-			if (oak_app_createlogin_success(applib,login->userid(),&nv_pairs,&nv_pairs_len))
+			if (oak_app_createlogin_success(applib,userid,&nv_pairs,&nv_pairs_len))
 			{
-				oak_app_createlogin_failed(applib,login->userid(),CREATELOGIN_APPREJECTED,&nv_pairs,&nv_pairs_len);
+				oak_app_createlogin_failed(applib,userid,CREATELOGIN_APPREJECTED,&nv_pairs,&nv_pairs_len);
 				status_string="Rejected";
 			}
 			else
@@ -82,7 +105,7 @@ int cgiMain()
 				// Create the login (email, password, userid & secret)
 				if (createLogin(email,password,userid,secret)==false)
 				{
-					oak_app_createlogin_failed(applib,"",CREATELOGIN_INTERNAL_ERROR,&nv_pairs,&nv_pairs_len);
+					oak_app_createlogin_failed(applib,userid,CREATELOGIN_INTERNAL_ERROR,&nv_pairs,&nv_pairs_len);
 					status_string="Create failed";
 				}
 				else

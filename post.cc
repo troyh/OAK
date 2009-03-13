@@ -32,12 +32,14 @@ int cgiMain()
 	NAMEVAL_PAIR* nv_pairs=NULL;
 	size_t nv_pairs_len=0;
 	
+	unsigned int status_code=501;
 	const char* status_string=NULL;
 	
 	if (!userIsValidated())
 	{
 		oak_app_post_failed(applib,"","",POST_INVALIDUSER,&nv_pairs,&nv_pairs_len);
 
+		status_code=401;
 		status_string="User could not be validated.";
 	}
 	else
@@ -136,7 +138,7 @@ int cgiMain()
 	}
 	
 	if (status_string)
-		cgiHeaderStatus(501,(char*)status_string);
+		cgiHeaderStatus(status_code,(char*)status_string);
 	else
 	{
 		// TODO: support JSON output too
