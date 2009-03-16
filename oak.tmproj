@@ -20,7 +20,7 @@
 			<key>filename</key>
 			<string>login.cc</string>
 			<key>lastUsed</key>
-			<date>2009-03-13T18:48:06Z</date>
+			<date>2009-03-13T20:26:19Z</date>
 		</dict>
 		<dict>
 			<key>filename</key>
@@ -62,6 +62,16 @@
 			<key>lastUsed</key>
 			<date>2009-03-13T18:48:11Z</date>
 		</dict>
+		<dict>
+			<key>expanded</key>
+			<true/>
+			<key>name</key>
+			<string>test</string>
+			<key>regexFolderFilter</key>
+			<string>!.*/(\.[^/]*|CVS|_darcs|_MTN|\{arch\}|blib|.*~\.nib|.*\.(framework|app|pbproj|pbxproj|xcode(proj)?|bundle))$</string>
+			<key>sourceDirectory</key>
+			<string>test</string>
+		</dict>
 	</array>
 	<key>fileHierarchyDrawerWidth</key>
 	<integer>200</integer>
@@ -70,6 +80,6 @@
 	<key>showFileHierarchyDrawer</key>
 	<true/>
 	<key>windowFrame</key>
-	<string>{{1262, 104}, {1028, 1347}}</string>
+	<string>{{1277, 63}, {1028, 1347}}</string>
 </dict>
 </plist>

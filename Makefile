@@ -8,12 +8,12 @@ ALL: $(FCGI_PROGS)
 
 INSTALL: ALL
 	sudo mkdir -p /usr/local/include/OAK/ /usr/local/lib/OAK/
-	sudo cp oak.h /usr/local/include/OAK/
+	sudo cp -t /usr/local/include/OAK/ oak.h loginutils.h 
 	sudo cp liboak.a /usr/local/lib/OAK/
 	-sudo killall --quiet $(FCGI_PROGS)
 	sudo cp *.fcgi /var/www/beer/api/
 
-liboak.a: oak.o
+liboak.a: oak.o loginutils.o
 	ar -rc $@ $^
 
 post.fcgi: post.o loginutils.o liboak.a
