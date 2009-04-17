@@ -4,7 +4,434 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+extern "C" 
+{
+#include <cgic.h>
+}
+
+#include <libxml/xmlwriter.h>
+#include <libxml/xmlsave.h>
+#include <libxslt/xsltInternals.h>
+#include <libxslt/transform.h>
+
 #include "oak.h"
+
+#define MAX_XSLT_PARAMS 16
+
+namespace OAK
+{
+
+Exception::Exception(OAK_RESULT result, const std::string& msg) throw()
+	: m_result(result), m_msg(msg)
+{
+}
+
+Exception::Exception(OAK_RESULT result, const xmlErrorPtr xmlerror) throw()
+	: m_result(result), m_msg(xmlerror?xmlerror->message:"Unknown XML error")
+{
+	if (xmlerror)
+	{
+		if (xmlerror->str1)
+		{
+			m_msg+=" ";
+			m_msg+=xmlerror->str1;
+		}
+		if (xmlerror->str2)
+		{
+			m_msg+=" ";
+			m_msg+=xmlerror->str2;
+		}
+		if (xmlerror->str3)
+		{
+			m_msg+=" ";
+			m_msg+=xmlerror->str3;
+		}
+	}
+}
+
+Exception::Exception(const Exception& x) throw()
+	: m_result(x.m_result), m_msg(x.m_msg)
+{
+}
+
+Exception::Exception& Exception::operator=(const Exception& x) throw()
+{
+	m_result=x.m_result;
+	m_msg=x.m_msg;
+	return *this;
+}
+
+
+OAK::OAK(const boost::filesystem::path& conffile)
+	: m_cfg(conffile)
+{
+}
+
+
+OAK::~OAK()
+{
+}
+
+OAK_RESULT OAK::auth_user()
+{
+	char userid[MAX_USERID_LEN];
+	if (cgiCookieString((char*)"userid",userid,sizeof(userid))!=cgiFormSuccess)
+	{
+		return OAK_AUTH_USERID_MISSING;
+	}
+
+	LOGININFO* login=lookupLoginByUserId(userid);
+	if (!login)
+	{
+		return OAK_AUTH_USERID_NOT_FOUND;
+	}
+
+	char correct_usrkey[USERKEY_LENGTH];
+	
+	if (!makeUserKey(login,cgiRemoteAddr,correct_usrkey,sizeof(correct_usrkey)))
+	{
+		return OAK_AUTH_INTERNAL_ERROR;
+	}
+
+	char userkey[USERKEY_LENGTH];
+	cgiCookieString((char*)"usrkey",userkey,sizeof(userkey));
+	// The cookie usrkey must match usrkey
+	if (strcmp(userkey,correct_usrkey))
+	{
+		return OAK_AUTH_KEY_MISMATCH;
+	}
+
+	// OK, user is validated as well as we can
+	return OAK_OK;
+}
+
+OAK_RESULT OAK::get_user_id(char* user_id,size_t user_id_size)
+{
+	char userid[MAX_USERID_LEN];
+	if (cgiCookieString((char*)"userid",userid,sizeof(userid))!=cgiFormSuccess)
+	{
+		return OAK_AUTH_USERID_MISSING;
+	}
+	return OAK_OK;
+}
+
+OAK_RESULT OAK::store_document(const char* name, const xmlDocPtr xmldoc)
+{
+	boost::filesystem::path filename=m_cfg.get("DOC_DIR");
+	filename/=name;
+	
+	try
+	{
+		boost::filesystem::path dirs=filename;
+		dirs=dirs.remove_leaf();
+		if (!is_directory(dirs))
+			boost::filesystem::create_directories(dirs);
+	}
+	catch (...)
+	{
+		throw Exception(OAK_STORE_WRITE_FAILED,"Unable to create file path");
+	}
+	
+	xmlSaveCtxtPtr save_context=xmlSaveToFilename(filename.string().c_str(),NULL,XML_SAVE_FORMAT);
+	if (!save_context)
+		throw Exception(OAK_STORE_WRITE_FAILED,xmlGetLastError());
+
+	if (xmlSaveDoc(save_context,xmldoc)==-1)
+	{
+		xmlErrorPtr err=xmlGetLastError();
+		xmlSaveClose(save_context);
+		throw Exception(OAK_STORE_WRITE_FAILED,err);
+	}
+	
+	if (xmlSaveClose(save_context)==-1)
+		throw Exception(OAK_STORE_WRITE_FAILED,xmlGetLastError());
+
+	return OAK_OK;
+}
+
+xmlBufferPtr OAK::document_in_memory(const xmlDocPtr xmldoc)
+{
+	xmlBufferPtr buffer=xmlBufferCreate();
+	if (!buffer)
+		throw Exception(OAK_STORE_WRITE_FAILED,xmlGetLastError());
+		
+	xmlSaveCtxtPtr save_context=xmlSaveToBuffer(buffer,NULL,XML_SAVE_FORMAT);
+	if (!save_context)
+	{
+		xmlErrorPtr err=xmlGetLastError();
+		xmlBufferFree(buffer);
+		throw Exception(OAK_STORE_WRITE_FAILED,err);
+	}
+
+	if (xmlSaveDoc(save_context,xmldoc)==-1)
+	{
+		xmlErrorPtr err=xmlGetLastError();
+		xmlBufferFree(buffer);
+		xmlSaveClose(save_context);
+		throw Exception(OAK_STORE_WRITE_FAILED,err);
+	}
+	
+	if (xmlSaveClose(save_context)==-1)
+	{
+		xmlErrorPtr err=xmlGetLastError();
+		xmlBufferFree(buffer);
+		xmlSaveClose(save_context);
+		throw Exception(OAK_STORE_WRITE_FAILED,err);
+	}
+
+	return buffer;
+}
+
+const char* OAK::get_field_value(const char* field_name) const
+{
+	std::map<std::string,std::string>::const_iterator itr=m_form_fields.find(field_name);
+	if (itr==m_form_fields.end())
+		return NULL;
+	return itr->second.c_str();
+}
+
+const char* OAK::skipws(const char* p)
+{
+	if (p)
+	{
+		while (*p && isspace(*p))
+			++p;
+	}
+	return p;
+}
+
+OAK_RESULT OAK::validate_field(const char* name, OAK_DATATYPE type, OAK_VALIDATE_FIELD_FUNC userfunc)
+{
+	OAK_RESULT res=OAK_OK;
+
+	char buf[256];
+	const char* value=buf;
+	const char* orig_value=value;
+	
+	// TODO: support fields longer than 256 chars
+	if (cgiFormString((char*)name,buf,sizeof(buf))!=cgiFormSuccess)
+		res=OAK_VALIDATE_FIELD_NONEXISTENT;
+	else
+	{
+		switch (type)
+		{
+		case OAK_DATATYPE_UINT:
+			value=skipws(value);
+			if (!value)
+				res=OAK_VALIDATE_NOVALUE;
+			while (*value)
+			{
+				if (!isdigit(*value))
+				{
+					res=OAK_VALIDATE_BADVALUE;
+					break;
+				}
+				else
+					++value;
+			}
+			break;
+		case OAK_DATATYPE_MONEY:
+			value=skipws(value);
+			if (!value)
+			{
+				res=OAK_VALIDATE_NOVALUE;
+				break;
+			}
+			else if (*value!='$')
+			{
+				res=OAK_VALIDATE_BADVALUE;
+				break;
+			}
+			else
+				++value;
+			// Fall through to OAK_DATATYPE_FLOAT
+		case OAK_DATATYPE_FLOAT:
+			value=skipws(value);
+			if (!value)
+				res=OAK_VALIDATE_NOVALUE;
+			else
+			{
+				while (*value)
+				{
+					if (!isdigit(*value) && *value!='.')
+					{
+						res=OAK_VALIDATE_BADVALUE;
+						break;
+					}
+					++value;
+				}
+			}
+			break;
+		case OAK_DATATYPE_TEXT:
+			break;
+		case OAK_DATATYPE_CUSTOM:
+			if (!userfunc)
+				res=OAK_VALIDATE_BADFUNC;
+			else if (userfunc(name,value)!=OAK_OK)
+				res=OAK_VALIDATE_FAILED;
+			break;
+		default:
+			res=OAK_VALIDATE_BADTYPE;
+			break;
+		}
+	}
+
+	if (res==OAK_OK)
+	{
+		// Store value internally
+		m_form_fields[name]=orig_value;
+	}
+	else if (res!=OAK_VALIDATE_FIELD_NONEXISTENT)
+	{
+		// Store as an invalid field
+		m_form_fields_invalid[name]=orig_value;
+	}
+	
+	return OAK_OK;
+}
+
+OAK_RESULT OAK::add_field(const char* name, const char* value)
+{
+	m_form_fields[name]=value;
+	return OAK_OK;
+}
+
+unsigned int OAK::invalid_fields_count() const
+{
+	return m_form_fields_invalid.size();
+}
+
+const char* OAK::get_invalid_field_name(size_t n) const
+{
+	std::map<std::string,std::string>::const_iterator itr=m_form_fields_invalid.begin();
+	std::map<std::string,std::string>::const_iterator itr_end=m_form_fields_invalid.end();
+	while (n && itr!=itr_end)
+	{
+		++itr;
+		--n;
+	}
+
+	if (itr==itr_end) // Didn't find that many items
+		return NULL;
+		
+	return itr->first.c_str();
+}
+
+const char* OAK::get_invalid_field_value(size_t n) const
+{
+	std::map<std::string,std::string>::const_iterator itr=m_form_fields_invalid.begin();
+	std::map<std::string,std::string>::const_iterator itr_end=m_form_fields_invalid.end();
+	while (itr!=itr_end && n)
+	{
+		++itr;
+		--n;
+	}
+
+	if (itr==itr_end) // Didn't find that many items
+		return NULL;
+		
+	return itr->second.c_str();
+}
+
+OAK_RESULT OAK::xslt(const char* xslname, xmlDocPtr* result_doc, xmlDocPtr doc) const
+{
+	const char* params[MAX_XSLT_PARAMS*2+1];
+
+	size_t param_count=0;
+	size_t params_buf_size=0;
+
+	// First, count the params
+	std::map<std::string,std::string>::const_iterator itr=m_form_fields.begin();
+	std::map<std::string,std::string>::const_iterator itr_end=m_form_fields.end();
+	while (itr!=itr_end)
+	{
+		params_buf_size+=itr->second.length()+3; // +3 for 2 quotes and a null-terminator
+		++param_count;
+		++itr;
+	}
+	
+	if (param_count>MAX_XSLT_PARAMS)
+		throw Exception(OAK_XSLT_FAILED,"Too many parameters");
+
+	char* params_buf=new char[params_buf_size];
+	if (!params_buf)
+		throw Exception(OAK_XSLT_FAILED,"Out of memory");
+		
+	memset(params_buf,0,params_buf_size);
+	
+	// Put form fields into params
+	size_t pi=0;
+	char* params_buf_ptr=params_buf;
+	itr=m_form_fields.begin();
+	itr_end=m_form_fields.end();
+	while (itr!=itr_end)
+	{
+		strcat(params_buf_ptr,"'");
+		strcat(params_buf_ptr,itr->second.c_str());
+		strcat(params_buf_ptr,"'");
+		
+		params[pi++]=itr->first.c_str();
+		params[pi++]=params_buf_ptr;
+		
+		params_buf_ptr+=strlen(params_buf_ptr)+1;
+	
+		itr++;
+	}
+	params[pi]=NULL; // Terminate the list of params
+	
+	xsltInit();
+	xmlSubstituteEntitiesDefault(1);
+	xmlLoadExtDtdDefaultValue=1;
+	
+	char xslfilename[256];
+	sprintf(xslfilename,"%s/xsl/%s",m_cfg.get("APP_DIR"),xslname);
+	
+	xsltStylesheetPtr xsl=xsltParseStylesheetFile((const xmlChar*)xslfilename);
+	if (!xsl)
+		throw Exception(OAK_XSLT_BADXSL,xmlGetLastError());
+		
+	if (!doc) // We weren't provided a doc...
+	{
+		// Create an empty XML doc
+		doc=xmlParseDoc((xmlChar*)"<document/>");
+		if (!doc)
+			throw Exception(OAK_XSLT_FAILED,xmlGetLastError());
+	}
+	
+	xsltTransformContextPtr ctxt=xsltNewTransformContext(xsl,doc);
+	if (!ctxt)
+	{
+		xmlErrorPtr err=xmlGetLastError();
+		xsltFreeStylesheet(xsl);
+		xsltCleanupGlobals();
+		xmlCleanupParser();
+		throw Exception(OAK_XSLT_FAILED,err);
+	}
+	
+	*result_doc=xsltApplyStylesheetUser(xsl,doc,params,NULL,NULL,ctxt);
+	
+	// Free alloc'd space
+	delete params_buf;
+	
+	if (!*result_doc)
+	{
+		xmlErrorPtr err=xmlGetLastError();
+		xsltFreeTransformContext(ctxt);
+		xsltFreeStylesheet(xsl);
+		xsltCleanupGlobals();
+		xmlCleanupParser();
+		throw Exception(OAK_XSLT_FAILED,err);
+	}
+	
+	xsltFreeTransformContext(ctxt);
+	xsltFreeStylesheet(xsl);
+	xsltCleanupGlobals();
+	xmlCleanupParser();
+
+	return OAK_OK;
+}
+
+} // End OAK namespace
 
 OAK_APPLIB_HANDLE::OAK_APPLIB_HANDLE()
 	: dl_handle(0),login_success(0),login_failed(0),logout_success(0),logout_failed(0)
@@ -141,4 +568,31 @@ const char* NAMEVAL_PAIR_OBJ::get(const char* name) const
 			return m_nvp[i].val;
 	}
 	return NULL;
+}
+
+namespace OAK
+{
+// TODO: give English strings here:
+const char* OAK::s_result_strings[]=
+{
+	"OAK_OK",
+	
+	"OAK_AUTH_USERID_NOT_FOUND",
+	"OAK_AUTH_INTERNAL_ERROR",
+	"OAK_AUTH_KEY_MISMATCH",
+	"OAK_AUTH_USERID_MISSING",
+	
+	"OAK_VALIDATE_FIELD_NONEXISTENT",
+	"OAK_VALIDATE_NOVALUE",
+	"OAK_VALIDATE_BADVALUE",
+	"OAK_VALIDATE_BADTYPE",
+	"OAK_VALIDATE_FAILED",
+	"OAK_VALIDATE_BADFUNC",
+	
+	"OAK_XSLT_BADXSL",
+	"OAK_XSLT_FAILED",
+
+	"OAK_STORE_WRITE_FAILED"
+};
+
 }

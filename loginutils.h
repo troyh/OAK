@@ -1,3 +1,5 @@
+#if !defined(__LOGINUTILS_H)
+#define __LOGINUTILS_H
 
 const size_t SECRET_LENGTH=32;
 const size_t USERKEY_LENGTH=32;
@@ -38,6 +40,4 @@ void setLoginCookies(LOGININFO* login);
 void clearLoginCookies();
 bool userIsValidated();
 
-
-
-
+#endif

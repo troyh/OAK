@@ -1,6 +1,8 @@
+# aptitude install libgcrypt-dev
+
 .PHONY: ALL INSTALL
 
-CXXFLAGS=-rdynamic 
+CXXFLAGS=-rdynamic -I/usr/include/libxml2
 
 FCGI_PROGS=post.fcgi login.fcgi logout.fcgi createlogin.fcgi cookies.fcgi
 
@@ -13,23 +15,23 @@ INSTALL: ALL
 	-sudo killall --quiet $(FCGI_PROGS)
 	sudo cp *.fcgi /var/www/beer/api/
 
-liboak.a: oak.o loginutils.o
+liboak.a: oak.o loginutils.o Config.o
 	ar -rc $@ $^
 
 post.fcgi: post.o loginutils.o liboak.a
-	g++ $^ -lfcgi -lcgic_fcgi -lgcrypt -ldl -lmemcached -L. -loak -o $@
+	g++ $^ -lfcgi -lcgic_fcgi -lgcrypt -ldl -lmemcached -lxml2 -lxslt -lboost_filesystem -L. -loak -o $@
 
 login.fcgi: login.o loginutils.o liboak.a
-	g++ $^ -lfcgi -lcgic_fcgi -lgcrypt -ldl -lmemcached -L. -loak -o $@
+	g++ $^ -lfcgi -lcgic_fcgi -lgcrypt -ldl -lmemcached -lxml2 -lxslt -lboost_filesystem -L. -loak -o $@
 
 logout.fcgi: logout.o loginutils.o liboak.a
-	g++ $^ -lfcgi -lcgic_fcgi -lgcrypt -ldl -lmemcached -L. -loak -o $@
+	g++ $^ -lfcgi -lcgic_fcgi -lgcrypt -ldl -lmemcached -lxml2 -lxslt -lboost_filesystem -L. -loak -o $@
 
 createlogin.fcgi: createlogin.o loginutils.o liboak.a
-	g++ $^ -lfcgi -lcgic_fcgi -lgcrypt -ldl -lmemcached -L. -loak -o $@
+	g++ $^ -lfcgi -lcgic_fcgi -lgcrypt -ldl -lmemcached -lxml2 -lxslt -lboost_filesystem -L. -loak -o $@
 
 cookies.fcgi: cookies.o
-	g++ $^ -lfcgi -lcgic_fcgi -o $@
+	g++ $^ -lfcgi -lcgic_fcgi -lxml2 -o $@
 
 oak.o: oak.cc oak.h
-	g++ -c $< -ldl -o $@
+	g++ -c $< -ldl -I/usr/include/libxml2 -o $@
