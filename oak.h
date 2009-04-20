@@ -107,11 +107,10 @@ typedef enum
 	OAK_DATATYPE_UINT=1,
 	OAK_DATATYPE_FLOAT,
 	OAK_DATATYPE_TEXT,
-	OAK_DATATYPE_MONEY,
-	OAK_DATATYPE_CUSTOM
+	OAK_DATATYPE_MONEY
 } OAK_DATATYPE;
 
-typedef bool (*OAK_VALIDATE_FIELD_FUNC)(const char* name, const char* value);
+typedef OAK_RESULT (*OAK_VALIDATE_FIELD_FUNC)(const char* name, const char* value);
 
 namespace OAK
 {
@@ -156,7 +155,7 @@ public:
 	const char* get_invalid_field_name(size_t n) const;
 	const char* get_invalid_field_value(size_t n) const;
 
-	OAK_RESULT xslt(const char* xslname, xmlDocPtr* result_doc, xmlDocPtr doc=NULL) const;
+	OAK_RESULT xslt(const char* xslname, xmlDocPtr* result_doc, xmlDocPtr doc=NULL);
 	
 	const char* get_result_string(OAK_RESULT result) { return s_result_strings[result]; }
 };

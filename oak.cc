@@ -151,32 +151,32 @@ OAK_RESULT OAK::store_document(const char* name, const xmlDocPtr xmldoc)
 
 xmlBufferPtr OAK::document_in_memory(const xmlDocPtr xmldoc)
 {
-	xmlBufferPtr buffer=xmlBufferCreate();
-	if (!buffer)
-		throw Exception(OAK_STORE_WRITE_FAILED,xmlGetLastError());
-		
-	xmlSaveCtxtPtr save_context=xmlSaveToBuffer(buffer,NULL,XML_SAVE_FORMAT);
-	if (!save_context)
-	{
-		xmlErrorPtr err=xmlGetLastError();
-		xmlBufferFree(buffer);
-		throw Exception(OAK_STORE_WRITE_FAILED,err);
-	}
-
-	if (xmlSaveDoc(save_context,xmldoc)==-1)
-	{
-		xmlErrorPtr err=xmlGetLastError();
-		xmlBufferFree(buffer);
-		xmlSaveClose(save_context);
-		throw Exception(OAK_STORE_WRITE_FAILED,err);
-	}
+	xmlBufferPtr buffer=NULL;
+	xmlSaveCtxtPtr save_context=NULL;
 	
-	if (xmlSaveClose(save_context)==-1)
+	try
 	{
-		xmlErrorPtr err=xmlGetLastError();
-		xmlBufferFree(buffer);
-		xmlSaveClose(save_context);
-		throw Exception(OAK_STORE_WRITE_FAILED,err);
+		buffer=xmlBufferCreate();
+		if (!buffer)
+			throw Exception(OAK_STORE_WRITE_FAILED,xmlGetLastError());
+		
+		save_context=xmlSaveToBuffer(buffer,"UTF-8",XML_SAVE_FORMAT);
+		if (!save_context)
+			throw Exception(OAK_STORE_WRITE_FAILED,xmlGetLastError());
+			
+		if (xmlSaveDoc(save_context,xmldoc)==-1)
+			throw Exception(OAK_STORE_WRITE_FAILED,xmlGetLastError());
+	
+		if (xmlSaveClose(save_context)==-1)
+			throw Exception(OAK_STORE_WRITE_FAILED,xmlGetLastError());
+	}
+	catch (...)
+	{
+		if (save_context)
+			xmlSaveClose(save_context);
+		if (buffer)
+			xmlBufferFree(buffer);
+		throw;
 	}
 
 	return buffer;
@@ -264,12 +264,6 @@ OAK_RESULT OAK::validate_field(const char* name, OAK_DATATYPE type, OAK_VALIDATE
 			break;
 		case OAK_DATATYPE_TEXT:
 			break;
-		case OAK_DATATYPE_CUSTOM:
-			if (!userfunc)
-				res=OAK_VALIDATE_BADFUNC;
-			else if (userfunc(name,value)!=OAK_OK)
-				res=OAK_VALIDATE_FAILED;
-			break;
 		default:
 			res=OAK_VALIDATE_BADTYPE;
 			break;
@@ -278,8 +272,14 @@ OAK_RESULT OAK::validate_field(const char* name, OAK_DATATYPE type, OAK_VALIDATE
 
 	if (res==OAK_OK)
 	{
-		// Store value internally
-		m_form_fields[name]=orig_value;
+		// Call user's func (if one specified)
+		if (userfunc && userfunc(name,value)!=OAK_OK)
+			res=OAK_VALIDATE_FAILED;
+		else
+		{
+			// Store value internally
+			m_form_fields[name]=orig_value;
+		}
 	}
 	else if (res!=OAK_VALIDATE_FIELD_NONEXISTENT)
 	{
@@ -333,9 +333,9 @@ const char* OAK::get_invalid_field_value(size_t n) const
 	return itr->second.c_str();
 }
 
-OAK_RESULT OAK::xslt(const char* xslname, xmlDocPtr* result_doc, xmlDocPtr doc) const
+OAK_RESULT OAK::xslt(const char* xslname, xmlDocPtr* result_doc, xmlDocPtr doc)
 {
-	const char* params[MAX_XSLT_PARAMS*2+1];
+	const char* params[(MAX_XSLT_PARAMS+1)*2+1]; // +1 for timestamp, +1 for terminating NULL
 
 	size_t param_count=0;
 	size_t params_buf_size=0;
@@ -353,78 +353,105 @@ OAK_RESULT OAK::xslt(const char* xslname, xmlDocPtr* result_doc, xmlDocPtr doc) 
 	if (param_count>MAX_XSLT_PARAMS)
 		throw Exception(OAK_XSLT_FAILED,"Too many parameters");
 
-	char* params_buf=new char[params_buf_size];
+	char* params_buf=(char*)xmlMemMalloc(params_buf_size);
 	if (!params_buf)
 		throw Exception(OAK_XSLT_FAILED,"Out of memory");
 		
-	memset(params_buf,0,params_buf_size);
-	
-	// Put form fields into params
-	size_t pi=0;
-	char* params_buf_ptr=params_buf;
-	itr=m_form_fields.begin();
-	itr_end=m_form_fields.end();
-	while (itr!=itr_end)
+	xsltStylesheetPtr xsl=NULL;
+	xsltTransformContextPtr ctxt=NULL;
+	bool bMustFreeDoc=false;
+		
+	try 
 	{
-		strcat(params_buf_ptr,"'");
-		strcat(params_buf_ptr,itr->second.c_str());
-		strcat(params_buf_ptr,"'");
+		memset(params_buf,0,params_buf_size);
+	
+		// Put form fields into params
+		size_t pi=0;
+		char* params_buf_ptr=params_buf;
+		itr=m_form_fields.begin();
+		itr_end=m_form_fields.end();
+		while (itr!=itr_end)
+		{
+			strcat(params_buf_ptr,"'");
+			strcat(params_buf_ptr,itr->second.c_str());
+			strcat(params_buf_ptr,"'");
+					
+			params[pi++]=itr->first.c_str();
+			params[pi++]=params_buf_ptr;
+					
+			params_buf_ptr+=strlen(params_buf_ptr)+1;
+	
+			itr++;
+		}
 		
-		params[pi++]=itr->first.c_str();
-		params[pi++]=params_buf_ptr;
+		// Add timestamp
+		time_t now=time(0);
+		struct tm* now_tm=gmtime(&now);
+		params[pi++]="timestamp";
+		char now_str[24]="";
+		sprintf(now_str,"'%04d-%02d-%02dT%02d:%02d:%02dZ'",now_tm->tm_year+1900,now_tm->tm_mon+1,now_tm->tm_mday,now_tm->tm_hour,now_tm->tm_min,now_tm->tm_sec);
+		params[pi++]=now_str;
 		
-		params_buf_ptr+=strlen(params_buf_ptr)+1;
+		// Add terminator
+		params[pi]=NULL;
 	
-		itr++;
-	}
-	params[pi]=NULL; // Terminate the list of params
+		xsltInit();
+		xmlSubstituteEntitiesDefault(1);
+		xmlLoadExtDtdDefaultValue=1;
 	
-	xsltInit();
-	xmlSubstituteEntitiesDefault(1);
-	xmlLoadExtDtdDefaultValue=1;
+		char xslfilename[256];
+		sprintf(xslfilename,"%s/xsl/%s",m_cfg.get("APP_DIR"),xslname);
 	
-	char xslfilename[256];
-	sprintf(xslfilename,"%s/xsl/%s",m_cfg.get("APP_DIR"),xslname);
-	
-	xsltStylesheetPtr xsl=xsltParseStylesheetFile((const xmlChar*)xslfilename);
-	if (!xsl)
-		throw Exception(OAK_XSLT_BADXSL,xmlGetLastError());
+		xsl=xsltParseStylesheetFile((const xmlChar*)xslfilename);
+		if (!xsl)
+			throw Exception(OAK_XSLT_BADXSL,xmlGetLastError());
 		
-	if (!doc) // We weren't provided a doc...
-	{
-		// Create an empty XML doc
-		doc=xmlParseDoc((xmlChar*)"<document/>");
+		if (!doc) // We weren't provided a doc...
+		{
+			// Create an empty XML doc
+			doc=xmlParseDoc((xmlChar*)"<document/>");
+			if (!doc)
+				throw Exception(OAK_XSLT_FAILED,xmlGetLastError());
+			bMustFreeDoc=true;
+		}
+		
 		if (!doc)
+			throw Exception(OAK_XSLT_FAILED,"No doc provided");
+	
+		ctxt=xsltNewTransformContext(xsl,doc);
+		if (!ctxt)
+			throw Exception(OAK_XSLT_FAILED,xmlGetLastError());
+	
+		*result_doc=xsltApplyStylesheetUser(xsl,doc,params,NULL,NULL,ctxt);
+		if (!*result_doc)
 			throw Exception(OAK_XSLT_FAILED,xmlGetLastError());
 	}
-	
-	xsltTransformContextPtr ctxt=xsltNewTransformContext(xsl,doc);
-	if (!ctxt)
+	catch (...)
 	{
-		xmlErrorPtr err=xmlGetLastError();
-		xsltFreeStylesheet(xsl);
+		// Free alloc'd space
+		xmlMemFree(params_buf);
+		if (ctxt)
+			xsltFreeTransformContext(ctxt);
+		if (xsl)
+			xsltFreeStylesheet(xsl);
+		if (bMustFreeDoc && doc)
+			xmlFreeDoc(doc);
+			
 		xsltCleanupGlobals();
 		xmlCleanupParser();
-		throw Exception(OAK_XSLT_FAILED,err);
+		
+		throw;
 	}
-	
-	*result_doc=xsltApplyStylesheetUser(xsl,doc,params,NULL,NULL,ctxt);
 	
 	// Free alloc'd space
-	delete params_buf;
-	
-	if (!*result_doc)
-	{
-		xmlErrorPtr err=xmlGetLastError();
+	xmlMemFree(params_buf);
+	if (ctxt)
 		xsltFreeTransformContext(ctxt);
+	if (xsl)
 		xsltFreeStylesheet(xsl);
-		xsltCleanupGlobals();
-		xmlCleanupParser();
-		throw Exception(OAK_XSLT_FAILED,err);
-	}
-	
-	xsltFreeTransformContext(ctxt);
-	xsltFreeStylesheet(xsl);
+	if (bMustFreeDoc && doc)
+		xmlFreeDoc(doc);
+		
 	xsltCleanupGlobals();
 	xmlCleanupParser();
 
