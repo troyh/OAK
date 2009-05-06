@@ -16,17 +16,17 @@ using namespace std;
 
 OAK_APPLIB_HANDLE applib;
 
-extern "C" void cgiInit() 
+int oakInit() 
 {
-	oak_load_app_library(&applib);
+	// oak_load_app_library(&applib);
 }
 
-extern "C" void cgiUninit() 
+int oakUninit() 
 {
-	oak_unload_app_library(applib);
+	// oak_unload_app_library(applib);
 }
 
-int cgiMain()
+int oakMain(OAK::OAK& oak)
 {
 	NAMEVAL_PAIR* nv_pairs=NULL;
 	size_t nv_pairs_len=0;

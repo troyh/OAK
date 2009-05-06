@@ -1,25 +1,66 @@
+#include "oak.h"
+
 #include <string.h>
 #include <dlfcn.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
-extern "C" 
-{
-#include <cgic.h>
-}
-
 #include <libxml/xmlwriter.h>
 #include <libxml/xmlsave.h>
 #include <libxslt/xsltInternals.h>
 #include <libxslt/transform.h>
 
-#include "oak.h"
 
 #define MAX_XSLT_PARAMS 16
 
 namespace OAK
 {
+
+extern "C"
+void cgiInit()
+{
+	oakInit();
+}
+
+extern "C"
+void cgiUninit()
+{
+	oakUninit();
+}
+
+extern "C"
+int cgiMain()
+{
+	try
+	{
+		OAK oak(OAK::OAK::conf_file);
+		// TODO: only call oakMain() if user is authorized (if required) and all fields are validated (if required)
+		oakMain(oak);
+	}
+	catch (Exception& x)
+	{
+		// Give app a chance to handle it
+		if (oakException(x)==false)
+		{
+			// TODO: generate standard OAK exception output
+			FCGI_printf("OAK Exception:%s",x.what());
+		}
+	}
+	catch (apache::thrift::TException& x)
+	{
+		FCGI_printf("Thrift Exception:%s",x.what());
+	}
+	catch (std::exception& x)
+	{
+		FCGI_printf("Std Exception:%s",x.what());
+	}
+	catch (...)
+	{
+		FCGI_printf("Unknown exception\n");
+	}
+	return 0;
+}
 
 Exception::Exception(OAK_RESULT result, const std::string& msg) throw()
 	: m_result(result), m_msg(msg)
@@ -63,13 +104,57 @@ Exception::Exception& Exception::operator=(const Exception& x) throw()
 
 
 OAK::OAK(const boost::filesystem::path& conffile)
-	: m_cfg(conffile)
+	: m_cfg(conffile), m_variables_buffer(0), m_buffer_size(1024)
 {
+	if (cgi_flags&OAK_CGI_REQUIRE_USERID)
+	{
+		// TODO: do authentication
+	}
+		
+	load_cgi_fields();
 }
 
 
 OAK::~OAK()
 {
+	if (m_variables_buffer)
+		free(m_variables_buffer);
+}
+
+void OAK::load_cgi_fields()
+{
+	if (cgi_fields)
+	{
+		// Alloc space for CGI variables
+		if (m_variables_buffer) // Free it
+			free(m_variables_buffer);
+		m_variables_buffer=(char*)calloc(m_buffer_size,sizeof(char));
+		if (!m_variables_buffer)
+			throw Exception(OAK_MEM_ALLOC_FAILED,"");
+
+		char* bufptr=m_variables_buffer;
+		size_t bufleft=m_buffer_size;
+
+		for(size_t i = 0; cgi_fields[i].field_name; ++i)
+		{
+			// Get field from CGI env
+			if (cgiFormString((char*)cgi_fields[i].field_name,bufptr,bufleft)==cgiFormSuccess)
+			{
+				cgi_fields[i].original_value=bufptr;
+				cgi_fields[i].isset=true;
+				
+				// Adjust buffer ptr and size
+				size_t n=strlen(bufptr)+1;
+				bufptr+=n;
+				bufleft-=n;
+				
+				if (validate_field(i)==OAK_OK)
+				{
+					cgi_fields[i].validated=true;
+				}
+			}
+		}
+	}
 }
 
 OAK_RESULT OAK::auth_user()
@@ -110,6 +195,8 @@ OAK_RESULT OAK::get_user_id(char* user_id,size_t user_id_size)
 	char userid[MAX_USERID_LEN];
 	if (cgiCookieString((char*)"userid",userid,sizeof(userid))!=cgiFormSuccess)
 	{
+		if (user_id_size)
+			user_id[0]='\0';
 		return OAK_AUTH_USERID_MISSING;
 	}
 	return OAK_OK;
@@ -182,12 +269,33 @@ xmlBufferPtr OAK::document_in_memory(const xmlDocPtr xmldoc)
 	return buffer;
 }
 
-const char* OAK::get_field_value(const char* field_name) const
+OAK_CGI_FIELD* OAK::find_field(const char* field_name) const
 {
-	std::map<std::string,std::string>::const_iterator itr=m_form_fields.find(field_name);
-	if (itr==m_form_fields.end())
-		return NULL;
-	return itr->second.c_str();
+	for(size_t i = 0; cgi_fields[i].field_name; ++i)
+	{
+		if (!strcmp(cgi_fields[i].field_name,field_name))
+			return &cgi_fields[i];
+	}
+	return NULL;
+}
+
+
+OAK_CGIFIELD_VALUE_TYPE OAK::get_field_value(const char* field_name) const
+{
+	OAK_CGI_FIELD* field=find_field(field_name);
+	if (!field)
+		throw Exception(OAK_VALIDATE_FIELD_NONEXISTENT,field_name);
+	return field->converted_value;
+}
+
+bool OAK::field_exists(const char* field_name) const
+{
+	OAK_CGI_FIELD* field=find_field(field_name);
+	if (field)
+	{
+		return field->validated;
+	}
+	return false;
 }
 
 const char* OAK::skipws(const char* p)
@@ -200,94 +308,123 @@ const char* OAK::skipws(const char* p)
 	return p;
 }
 
-OAK_RESULT OAK::validate_field(const char* name, OAK_DATATYPE type, OAK_VALIDATE_FIELD_FUNC userfunc)
+OAK_RESULT OAK::validate_field(size_t n)
 {
 	OAK_RESULT res=OAK_OK;
-
-	char buf[256];
-	const char* value=buf;
-	const char* orig_value=value;
 	
-	// TODO: support fields longer than 256 chars
-	if (cgiFormString((char*)name,buf,sizeof(buf))!=cgiFormSuccess)
-		res=OAK_VALIDATE_FIELD_NONEXISTENT;
-	else
+	if (!cgi_fields)
+		throw Exception(OAK_VALIDATE_NOFIELDS,"");
+
+	// Find the field in cgi_fields
+	OAK_CGI_FIELD* field=&cgi_fields[n];
+		
+	const char* value=field->original_value;
+	
+	switch (field->type)
 	{
-		switch (type)
+	case OAK_DATATYPE_UINT16:
+	case OAK_DATATYPE_UINT32:
+	case OAK_DATATYPE_UINT64:
+	case OAK_DATATYPE_INT16:
+	case OAK_DATATYPE_INT32:
+	case OAK_DATATYPE_INT64:
+		value=skipws(value);
+		if (!value)
+			res=OAK_VALIDATE_NOVALUE;
+		else
 		{
-		case OAK_DATATYPE_UINT:
-			value=skipws(value);
-			if (!value)
-				res=OAK_VALIDATE_NOVALUE;
-			while (*value)
+			const char* p=value;
+			while (*p)
 			{
-				if (!isdigit(*value))
+				if (!isdigit(*p))
 				{
 					res=OAK_VALIDATE_BADVALUE;
 					break;
 				}
 				else
-					++value;
+					++p;
 			}
-			break;
-		case OAK_DATATYPE_MONEY:
-			value=skipws(value);
-			if (!value)
+			if (res==OAK_OK)
 			{
-				res=OAK_VALIDATE_NOVALUE;
-				break;
-			}
-			else if (*value!='$')
-			{
-				res=OAK_VALIDATE_BADVALUE;
-				break;
-			}
-			else
-				++value;
-			// Fall through to OAK_DATATYPE_FLOAT
-		case OAK_DATATYPE_FLOAT:
-			value=skipws(value);
-			if (!value)
-				res=OAK_VALIDATE_NOVALUE;
-			else
-			{
-				while (*value)
+				switch (field->type)
 				{
-					if (!isdigit(*value) && *value!='.')
-					{
-						res=OAK_VALIDATE_BADVALUE;
-						break;
-					}
-					++value;
+				case OAK_DATATYPE_UINT16: field->converted_value.uint16=atoll(value); break;
+				case OAK_DATATYPE_UINT32: field->converted_value.uint32=atoll(value); break;
+				case OAK_DATATYPE_UINT64: field->converted_value.uint64=atoll(value); break;
+				case OAK_DATATYPE_INT16:  field->converted_value.int16=atoi(value); break;
+				case OAK_DATATYPE_INT32:  field->converted_value.int32=atoi(value); break;
+				case OAK_DATATYPE_INT64:  field->converted_value.int64=atoi(value); break;
+				default:
+					throw Exception(OAK_INVALID_DATATYPE,"");
+					break;
 				}
 			}
-			break;
-		case OAK_DATATYPE_TEXT:
-			break;
-		default:
-			res=OAK_VALIDATE_BADTYPE;
+		}
+		break;
+	case OAK_DATATYPE_MONEY:
+		value=skipws(value);
+		if (!value)
+		{
+			res=OAK_VALIDATE_NOVALUE;
 			break;
 		}
+		else if (*value!='$')
+		{
+			res=OAK_VALIDATE_BADVALUE;
+			break;
+		}
+		else
+			++value;
+		// Fall through to OAK_DATATYPE_FLOAT
+	case OAK_DATATYPE_FLOAT:
+		value=skipws(value);
+		if (!value)
+			res=OAK_VALIDATE_NOVALUE;
+		else
+		{
+			const char* p=value;
+			while (*p)
+			{
+				if (!isdigit(*p) && *p!='.')
+				{
+					res=OAK_VALIDATE_BADVALUE;
+					break;
+				}
+				++p;
+			}
+		}
+		if (res==OAK_OK)
+		{
+			field->converted_value.dbl=strtod(value,NULL);
+		}
+		break;
+	case OAK_DATATYPE_TEXT:
+		field->converted_value.p=field->original_value;
+		break;
+	default:
+		res=OAK_VALIDATE_BADTYPE;
+		break;
+	}
+	
+	if (res==OAK_OK && field->validate_func)
+	{
+		// Call user's func (if one specified)
+		if (field->validate_func(field->field_name,value,field->converted_value)!=OAK_OK)
+			res=OAK_VALIDATE_FAILED;
 	}
 
 	if (res==OAK_OK)
 	{
-		// Call user's func (if one specified)
-		if (userfunc && userfunc(name,value)!=OAK_OK)
-			res=OAK_VALIDATE_FAILED;
-		else
-		{
-			// Store value internally
-			m_form_fields[name]=orig_value;
-		}
+		// Store value internally
+		m_form_fields[field->field_name]=field->original_value;
 	}
 	else if (res!=OAK_VALIDATE_FIELD_NONEXISTENT)
 	{
 		// Store as an invalid field
-		m_form_fields_invalid[name]=orig_value;
+		m_form_fields_invalid[field->field_name]=field->original_value;
 	}
 	
-	return OAK_OK;
+	return res;
 }
 
 OAK_RESULT OAK::add_field(const char* name, const char* value)
@@ -604,6 +741,8 @@ const char* OAK::s_result_strings[]=
 {
 	"OAK_OK",
 	
+	"OAK_INVALID_DATATYPE",
+	
 	"OAK_AUTH_USERID_NOT_FOUND",
 	"OAK_AUTH_INTERNAL_ERROR",
 	"OAK_AUTH_KEY_MISMATCH",
@@ -615,11 +754,13 @@ const char* OAK::s_result_strings[]=
 	"OAK_VALIDATE_BADTYPE",
 	"OAK_VALIDATE_FAILED",
 	"OAK_VALIDATE_BADFUNC",
+	"OAK_VALIDATE_NOFIELDS",
 	
 	"OAK_XSLT_BADXSL",
 	"OAK_XSLT_FAILED",
 
-	"OAK_STORE_WRITE_FAILED"
+	"OAK_STORE_WRITE_FAILED",
+	"OAK_MEM_ALLOC_FAILED"
 };
 
 }
